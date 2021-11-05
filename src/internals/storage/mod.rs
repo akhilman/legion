@@ -74,8 +74,11 @@ pub type Epoch = u64;
 /// accessed mutably.
 pub type Version = u64;
 
-static COMPONENT_VERSION: AtomicU64 = AtomicU64::new(0);
-pub(crate) fn next_component_version() -> u64 {
+/// The atomic version counter to be used internally.
+pub(crate) type AtomicVersion = AtomicU64;
+
+static COMPONENT_VERSION: AtomicVersion = AtomicVersion::new(0);
+pub(crate) fn next_component_version() -> Version {
     COMPONENT_VERSION.fetch_add(1, Ordering::SeqCst)
 }
 
@@ -152,12 +155,12 @@ impl_downcast!(UnknownComponentStorage);
 
 /// An accessor for a shared slice reference of components for a single archetype.
 pub struct ComponentSlice<'a, T: Component> {
-    pub(crate) components: &'a [T],
-    pub(crate) version: &'a Version,
+    components: &'a [T],
+    version: &'a AtomicVersion,
 }
 
 impl<'a, T: Component> ComponentSlice<'a, T> {
-    pub(crate) fn new(components: &'a [T], version: &'a Version) -> Self {
+    pub(crate) fn new(components: &'a [T], version: &'a AtomicVersion) -> Self {
         Self {
             components,
             version,
@@ -167,6 +170,11 @@ impl<'a, T: Component> ComponentSlice<'a, T> {
     /// Converts this slice into its inner value.
     pub fn into_slice(self) -> &'a [T] {
         self.components
+    }
+
+    /// Returns current component version.
+    pub fn version(&self) -> Version {
+        self.version.load(Ordering::Relaxed)
     }
 }
 
@@ -193,24 +201,35 @@ impl<'a, T: Component> Index<ComponentIndex> for ComponentSlice<'a, T> {
 
 /// An accessor for a mutable slice reference of components for a single archetype.
 pub struct ComponentSliceMut<'a, T: Component> {
-    // todo would be better if these were private and we controlled version increments more centrally
-    pub(crate) components: &'a mut [T],
-    pub(crate) version: &'a mut Version,
+    components: &'a mut [T],
+    version: &'a AtomicVersion,
+    next_version: Version,
 }
 
 impl<'a, T: Component> ComponentSliceMut<'a, T> {
-    pub(crate) fn new(components: &'a mut [T], version: &'a mut Version) -> Self {
+    pub(crate) fn new(components: &'a mut [T], version: &'a AtomicVersion) -> Self {
         Self {
             components,
             version,
+            next_version: next_component_version(),
         }
     }
 
     /// Converts this slice into its inner value.
     /// This increments the slice's version.
     pub fn into_slice(self) -> &'a mut [T] {
-        *self.version = next_component_version();
+        self.update_version();
         self.components
+    }
+
+    #[inline]
+    fn update_version(&self) {
+        self.version.store(self.next_version, Ordering::Relaxed);
+    }
+
+    /// Returns current component version.
+    pub fn version(&self) -> Version {
+        self.version.load(Ordering::Relaxed)
     }
 }
 
@@ -219,6 +238,13 @@ impl<'a, T: Component> Deref for ComponentSliceMut<'a, T> {
 
     fn deref(&self) -> &Self::Target {
         &self.components
+    }
+}
+
+impl<'a, T: Component> DerefMut for ComponentSliceMut<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.update_version();
+        &mut self.components
     }
 }
 
@@ -231,6 +257,7 @@ impl<'a, T: Component> Index<ComponentIndex> for ComponentSliceMut<'a, T> {
 
 impl<'a, T: Component> IndexMut<ComponentIndex> for ComponentSliceMut<'a, T> {
     fn index_mut(&mut self, index: ComponentIndex) -> &mut Self::Output {
+        self.update_version();
         &mut self.components[index.0]
     }
 }

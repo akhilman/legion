@@ -13,7 +13,7 @@ use crate::internals::{
     storage::{
         archetype::{Archetype, ArchetypeIndex},
         component::{Component, ComponentTypeId},
-        next_component_version, ComponentSliceMut, ComponentStorage, Components,
+        ComponentSliceMut, ComponentStorage, Components, Version,
     },
     subworld::ComponentAccess,
 };
@@ -129,11 +129,9 @@ impl<'a, T: Component> Iterator for WriteIter<'a, T> {
             Self::Indexed {
                 components,
                 archetypes,
-            } => {
-                archetypes
-                    .next()
-                    .map(|i| unsafe { components.get_mut(*i).map(|c| c.into()) })
-            }
+            } => archetypes
+                .next()
+                .map(|i| unsafe { components.get_mut(*i).map(|c| c.into()) }),
             Self::Grouped { slices } => slices.next().map(|c| Some(c.into())),
             Self::Empty => None,
         }
@@ -141,19 +139,13 @@ impl<'a, T: Component> Iterator for WriteIter<'a, T> {
 }
 
 #[doc(hidden)]
-pub struct WriteFetch<'a, T: Component> {
-    version: &'a mut u64,
-    components: &'a mut [T],
-    next_version: u64,
-}
+pub struct WriteFetch<'a, T: Component> (
+    ComponentSliceMut<'a, T>,
+);
 
 impl<'a, T: Component> From<ComponentSliceMut<'a, T>> for WriteFetch<'a, T> {
     fn from(slice: ComponentSliceMut<'a, T>) -> Self {
-        WriteFetch {
-            components: slice.components,
-            version: slice.version,
-            next_version: next_component_version(),
-        }
+        WriteFetch ( slice )
     }
 }
 
@@ -162,7 +154,7 @@ impl<'a, T: Component> IntoIndexableIter for WriteFetch<'a, T> {
     type IntoIter = IndexedIter<&'a mut [T]>;
 
     fn into_indexable_iter(self) -> Self::IntoIter {
-        IndexedIter::new(self.components)
+        IndexedIter::new(self.0.into_slice())
     }
 }
 
@@ -180,7 +172,7 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
 
     #[inline]
     fn into_components(self) -> Self::Data {
-        self.components
+        self.0.into_slice()
     }
 
     #[inline]
@@ -188,10 +180,7 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
             Some(unsafe {
-                std::slice::from_raw_parts(
-                    self.components.as_ptr() as *const C,
-                    self.components.len(),
-                )
+                std::slice::from_raw_parts(self.0.as_ptr() as *const C, self.0.len())
             })
         } else {
             None
@@ -203,10 +192,7 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
             Some(unsafe {
-                std::slice::from_raw_parts_mut(
-                    self.components.as_mut_ptr() as *mut C,
-                    self.components.len(),
-                )
+                std::slice::from_raw_parts_mut(self.0.as_mut_ptr() as *mut C, self.0.len())
             })
         } else {
             None
@@ -214,16 +200,14 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
     }
 
     #[inline]
-    fn version<C: Component>(&self) -> Option<u64> {
+    fn version<C: Component>(&self) -> Option<Version> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
-            Some(*self.version)
+            Some(self.0.version())
         } else {
             None
         }
     }
 
     #[inline]
-    fn accepted(&mut self) {
-        *self.version = self.next_version;
-    }
+    fn accepted(&mut self) {}
 }

@@ -13,7 +13,7 @@ use crate::internals::{
     storage::{
         archetype::{Archetype, ArchetypeIndex},
         component::{Component, ComponentTypeId},
-        ComponentSlice, ComponentStorage, Components,
+        ComponentSlice, ComponentStorage, Components, Version,
     },
     subworld::ComponentAccess,
 };
@@ -130,11 +130,9 @@ impl<'a, T: Component> Iterator for ReadIter<'a, T> {
             Self::Indexed {
                 components,
                 archetypes,
-            } => {
-                archetypes
-                    .next()
-                    .map(|i| components.get(*i).map(|c| c.into()))
-            }
+            } => archetypes
+                .next()
+                .map(|i| components.get(*i).map(|c| c.into())),
             Self::Grouped { slices } => slices.next().map(|c| Some(c.into())),
             Self::Empty => None,
         }
@@ -143,15 +141,16 @@ impl<'a, T: Component> Iterator for ReadIter<'a, T> {
 
 #[doc(hidden)]
 pub struct ReadFetch<'a, T: Component> {
-    version: &'a u64,
+    version: Version,
     components: &'a [T],
 }
 
 impl<'a, T: Component> From<ComponentSlice<'a, T>> for ReadFetch<'a, T> {
     fn from(slice: ComponentSlice<'a, T>) -> Self {
+        let version = slice.version();
         ReadFetch {
-            components: slice.components,
-            version: slice.version,
+            components: slice.into_slice(),
+            version,
         }
     }
 }
@@ -210,9 +209,9 @@ impl<'a, T: Component> Fetch for ReadFetch<'a, T> {
     }
 
     #[inline]
-    fn version<C: Component>(&self) -> Option<u64> {
+    fn version<C: Component>(&self) -> Option<Version> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
-            Some(*self.version)
+            Some(self.version)
         } else {
             None
         }

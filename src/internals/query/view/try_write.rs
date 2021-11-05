@@ -13,7 +13,7 @@ use crate::internals::{
     storage::{
         archetype::{Archetype, ArchetypeIndex},
         component::{Component, ComponentTypeId},
-        next_component_version, ComponentSliceMut, ComponentStorage, Components,
+        ComponentSliceMut, ComponentStorage, Components, Version,
     },
     subworld::ComponentAccess,
 };
@@ -123,21 +123,13 @@ impl<'a, T: Component> Iterator for TryWriteIter<'a, T> {
 
 #[doc(hidden)]
 pub enum Slice<'a, T: Component> {
-    Occupied {
-        version: &'a mut u64,
-        components: &'a mut [T],
-        next_version: u64,
-    },
+    Occupied(ComponentSliceMut<'a, T>),
     Empty(usize),
 }
 
 impl<'a, T: Component> From<ComponentSliceMut<'a, T>> for Slice<'a, T> {
     fn from(slice: ComponentSliceMut<'a, T>) -> Self {
-        Slice::Occupied {
-            components: slice.components,
-            version: slice.version,
-            next_version: next_component_version(),
-        }
+        Slice::Occupied(slice)
     }
 }
 
@@ -147,7 +139,7 @@ impl<'a, T: Component> IntoIndexableIter for Slice<'a, T> {
 
     fn into_indexable_iter(self) -> Self::IntoIter {
         let data = match self {
-            Self::Occupied { components, .. } => Data::Occupied(components),
+            Self::Occupied(slice) => Data::Occupied(slice.into_slice()),
             Self::Empty(count) => Data::Empty(count),
         };
         IndexedIter::new(data)
@@ -169,7 +161,7 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
     #[inline]
     fn into_components(self) -> Self::Data {
         match self {
-            Self::Occupied { components, .. } => Some(components),
+            Self::Occupied(slice) => Some(slice.into_slice()),
             Self::Empty(_) => None,
         }
     }
@@ -179,14 +171,9 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
             match self {
-                Self::Occupied { components, .. } => {
-                    Some(unsafe {
-                        std::slice::from_raw_parts(
-                            components.as_ptr() as *const C,
-                            components.len(),
-                        )
-                    })
-                }
+                Self::Occupied(slice) => Some(unsafe {
+                    std::slice::from_raw_parts(slice.as_ptr() as *const C, slice.len())
+                }),
                 Self::Empty(_) => None,
             }
         } else {
@@ -199,14 +186,9 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
             match self {
-                Self::Occupied { components, .. } => {
-                    Some(unsafe {
-                        std::slice::from_raw_parts_mut(
-                            components.as_mut_ptr() as *mut C,
-                            components.len(),
-                        )
-                    })
-                }
+                Self::Occupied(slice) => Some(unsafe {
+                    std::slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut C, slice.len())
+                }),
                 Self::Empty(_) => None,
             }
         } else {
@@ -215,10 +197,10 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
     }
 
     #[inline]
-    fn version<C: Component>(&self) -> Option<u64> {
+    fn version<C: Component>(&self) -> Option<Version> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             match self {
-                Self::Occupied { version, .. } => Some(**version),
+                Self::Occupied(slice) => Some(slice.version()),
                 Self::Empty(_) => None,
             }
         } else {
@@ -227,16 +209,7 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
     }
 
     #[inline]
-    fn accepted(&mut self) {
-        if let Self::Occupied {
-            version,
-            next_version,
-            ..
-        } = self
-        {
-            **version = *next_version
-        }
-    }
+    fn accepted(&mut self) {}
 }
 
 #[doc(hidden)]

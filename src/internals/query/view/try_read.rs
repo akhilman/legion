@@ -13,7 +13,7 @@ use crate::internals::{
     storage::{
         archetype::{Archetype, ArchetypeIndex},
         component::{Component, ComponentTypeId},
-        ComponentSlice, ComponentStorage, Components,
+        ComponentSlice, ComponentStorage, Components, Version,
     },
     subworld::ComponentAccess,
 };
@@ -125,7 +125,7 @@ impl<'a, T: Component> Iterator for TryReadIter<'a, T> {
 #[doc(hidden)]
 pub enum Slice<'a, T: Component> {
     Occupied {
-        version: &'a u64,
+        version: Version,
         components: &'a [T],
     },
     Empty(usize),
@@ -133,9 +133,10 @@ pub enum Slice<'a, T: Component> {
 
 impl<'a, T: Component> From<ComponentSlice<'a, T>> for Slice<'a, T> {
     fn from(slice: ComponentSlice<'a, T>) -> Self {
+        let version = slice.version();
         Slice::Occupied {
-            components: slice.components,
-            version: slice.version,
+            components: slice.into_slice(),
+            version,
         }
     }
 }
@@ -187,14 +188,9 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
             match self {
-                Self::Occupied { components, .. } => {
-                    Some(unsafe {
-                        std::slice::from_raw_parts(
-                            components.as_ptr() as *const C,
-                            components.len(),
-                        )
-                    })
-                }
+                Self::Occupied { components, .. } => Some(unsafe {
+                    std::slice::from_raw_parts(components.as_ptr() as *const C, components.len())
+                }),
                 Self::Empty(_) => None,
             }
         } else {
@@ -208,10 +204,10 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
     }
 
     #[inline]
-    fn version<C: Component>(&self) -> Option<u64> {
+    fn version<C: Component>(&self) -> Option<Version> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             match self {
-                Self::Occupied { version, .. } => Some(**version),
+                Self::Occupied { version, .. } => Some(*version),
                 Self::Empty(_) => None,
             }
         } else {

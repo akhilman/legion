@@ -2,18 +2,18 @@
 
 use std::{
     alloc::Layout,
-    cell::UnsafeCell,
     iter::Zip,
     mem::{align_of, size_of},
     ops::{Deref, DerefMut},
     ptr::NonNull,
     rc::Rc,
     slice::Iter,
+    sync::atomic::Ordering,
 };
 
 use super::{
-    archetype::ArchetypeIndex, component::Component, next_component_version, ComponentIndex,
-    ComponentMeta, ComponentSlice, ComponentSliceMut, ComponentStorage, Epoch,
+    archetype::ArchetypeIndex, component::Component, next_component_version, AtomicVersion,
+    ComponentIndex, ComponentMeta, ComponentSlice, ComponentSliceMut, ComponentStorage, Epoch,
     UnknownComponentStorage,
 };
 
@@ -291,12 +291,12 @@ pub struct PackedStorage<T: Component> {
     // The current epoch
     epoch: Epoch,
     // Ordered archetype versions
-    versions: Vec<UnsafeCell<u64>>,
+    versions: Vec<AtomicVersion>,
     // Ordered allocation metadata
     allocations: Vec<ComponentVec<T>>,
 }
 
-// these are needed because of the UnsafeCell in versions
+// these are needed because of the ComponentVec is not Send/Sync
 // but we write protect that ourselves
 unsafe impl<T: Component> Send for PackedStorage<T> {}
 unsafe impl<T: Component> Sync for PackedStorage<T> {}
@@ -344,8 +344,8 @@ impl<T: Component> UnknownComponentStorage for PackedStorage<T> {
         let dst_allocation = &mut self.allocations[dst_slice_index];
         unsafe {
             dst_allocation.extend_memcopy(self.epoch, &value as *const _, 1);
-            *self.versions[dst_slice_index].get() = next_component_version();
         }
+        *self.versions[dst_slice_index].get_mut() = next_component_version();
 
         // update slice pointers
         self.update_slice(src_slice_index);
@@ -364,7 +364,7 @@ impl<T: Component> UnknownComponentStorage for PackedStorage<T> {
 
         // insert archetype into collections
         self.slices.insert(index, allocation.as_raw_slice());
-        self.versions.insert(index, UnsafeCell::new(0));
+        self.versions.insert(index, AtomicVersion::new(0));
         self.allocations.insert(index, allocation);
 
         // update index
@@ -401,7 +401,7 @@ impl<T: Component> UnknownComponentStorage for PackedStorage<T> {
             );
 
             // bump destination version
-            unsafe { *dst.versions[dst_index].get() = next_component_version() };
+            *dst.versions[dst_index].get_mut() = next_component_version();
         } else {
             // memcopy components into the destination
             let (ptr, len) = self.get_raw(src_archetype).unwrap();
@@ -492,7 +492,9 @@ impl<T: Component> UnknownComponentStorage for PackedStorage<T> {
     ) -> Option<(*mut u8, usize)> {
         let slice_index = *self.index.get(archetype as usize)?;
         let (ptr, len) = self.slices.get(slice_index)?;
-        *self.versions.get_unchecked(slice_index).get() = next_component_version();
+        self.versions
+            .get_unchecked(slice_index)
+            .store(next_component_version(), Ordering::Relaxed);
         Some((ptr.as_ptr() as *mut u8, *len))
     }
 
@@ -507,7 +509,7 @@ impl<T: Component> UnknownComponentStorage for PackedStorage<T> {
         allocation.extend_memcopy(self.epoch, ptr as *const T, count);
         self.slices[slice_index] = allocation.as_raw_slice();
         self.entity_len += count;
-        *self.versions[slice_index].get() = next_component_version();
+        *self.versions[slice_index].get_mut() = next_component_version();
     }
 
     fn increment_epoch(&mut self) {
@@ -546,7 +548,7 @@ impl<'a, T: Component> ComponentStorage<'a, T> for PackedStorage<T> {
         let slice_index = *self.index.get(archetype as usize)?;
         let (ptr, len) = self.slices.get(slice_index)?;
         let slice = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), *len as usize) };
-        let version = unsafe { &*self.versions.get_unchecked(slice_index).get() };
+        let version = unsafe { self.versions.get_unchecked(slice_index) };
         Some(ComponentSlice::new(slice, version))
     }
 
@@ -557,7 +559,7 @@ impl<'a, T: Component> ComponentStorage<'a, T> for PackedStorage<T> {
         let slice_index = *self.index.get(archetype as usize)?;
         let (ptr, len) = self.slices.get(slice_index)?;
         let slice = std::slice::from_raw_parts_mut(ptr.as_ptr(), *len as usize);
-        let version = &mut *self.versions.get_unchecked(slice_index).get();
+        let version = self.versions.get_unchecked(slice_index);
         Some(ComponentSliceMut::new(slice, version))
     }
 
@@ -584,7 +586,7 @@ impl<'a, T: Component> ComponentStorage<'a, T> for PackedStorage<T> {
 
 #[doc(hidden)]
 pub struct ComponentIter<'a, T> {
-    slices: Zip<Iter<'a, (NonNull<T>, usize)>, Iter<'a, UnsafeCell<u64>>>,
+    slices: Zip<Iter<'a, (NonNull<T>, usize)>, Iter<'a, AtomicVersion>>,
 }
 
 impl<'a, T: Component> Iterator for ComponentIter<'a, T> {
@@ -594,7 +596,7 @@ impl<'a, T: Component> Iterator for ComponentIter<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         self.slices.next().map(|((ptr, len), version)| {
             let slice = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), *len as usize) };
-            let version = unsafe { &*version.get() };
+            let version = &version;
             ComponentSlice::new(slice, version)
         })
     }
@@ -602,7 +604,7 @@ impl<'a, T: Component> Iterator for ComponentIter<'a, T> {
 
 #[doc(hidden)]
 pub struct ComponentIterMut<'a, T> {
-    slices: Zip<Iter<'a, (NonNull<T>, usize)>, Iter<'a, UnsafeCell<u64>>>,
+    slices: Zip<Iter<'a, (NonNull<T>, usize)>, Iter<'a, AtomicVersion>>,
 }
 
 impl<'a, T: Component> Iterator for ComponentIterMut<'a, T> {
@@ -613,7 +615,6 @@ impl<'a, T: Component> Iterator for ComponentIterMut<'a, T> {
         self.slices.next().map(|((ptr, len), version)| {
             // safety: we know each slice is disjoint
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), *len as usize) };
-            let version = unsafe { &mut *version.get() };
             ComponentSliceMut::new(slice, version)
         })
     }
