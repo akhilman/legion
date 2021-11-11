@@ -273,7 +273,7 @@ impl<V: IntoView, F: EntityFilter> Query<V, F> {
         let arch_slice_ref: &[ArchetypeIndex] = &arch_slice;
         let arch_slice_ref = std::mem::transmute(arch_slice_ref);
         let result = QueryResult::unordered(arch_slice_ref);
-        let mut fetch = if let Some(Some(fetch)) =
+        let fetch = if let Some(Some(fetch)) =
             <V::View as View<'world>>::fetch(accessor.components(), accessor.archetypes(), result)
                 .next()
         {
@@ -289,9 +289,6 @@ impl<V: IntoView, F: EntityFilter> Query<V, F> {
                 return Err(EntityAccessError::AccessDenied);
             }
         }
-
-        // accept the fetch to trigger version increments
-        fetch.accepted();
 
         // construct a chunk view for the archetype, then index the entity we want
         let view = ChunkView::new(&accessor.archetypes()[location.archetype()], fetch);
@@ -890,10 +887,9 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         for fetch in &mut self.inner {
             // if fetch is None here, filtering is broken
-            let mut fetch = fetch.unwrap();
+            let fetch = fetch.unwrap();
             let idx = self.indices.next().unwrap();
             if self.filter.matches_archetype(&fetch).is_pass() {
-                fetch.accepted();
                 return Some(ChunkView::new(&self.archetypes[*idx], fetch));
             }
         }
@@ -914,7 +910,6 @@ where
 
 //     fn next(&mut self) -> Option<Self::Item> {
 //         for (index, mut fetch) in &mut self.inner {
-//             fetch.accepted();
 //             return Some(ChunkView::new(&self.archetypes[index], fetch));
 //         }
 //         None
@@ -965,10 +960,9 @@ pub mod par_iter {
         fn next(&mut self) -> Option<Self::Item> {
             let mut filter = self.filter.lock();
             for fetch in &mut self.inner {
-                let mut fetch = fetch.unwrap();
+                let fetch = fetch.unwrap();
                 let idx = self.indices.next().unwrap();
                 if filter.matches_archetype(&fetch).is_pass() {
-                    fetch.accepted();
                     return Some(ChunkView::new(&self.archetypes[*idx], fetch));
                 }
             }

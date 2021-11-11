@@ -207,7 +207,4 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
             None
         }
     }
-
-    #[inline]
-    fn accepted(&mut self) {}
 }

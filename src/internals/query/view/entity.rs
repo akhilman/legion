@@ -150,7 +150,4 @@ impl<'a> Fetch for EntityFetch<'a> {
     fn version<C: Component>(&self) -> Option<u64> {
         None
     }
-
-    #[inline]
-    fn accepted(&mut self) {}
 }

@@ -135,10 +135,6 @@ pub trait Fetch: IntoIndexableIter + Send + Sync {
     /// Tries to find the component slice version of a component,
     /// if this fetch contains the requested component type.
     fn version<T: Component>(&self) -> Option<u64>;
-
-    /// Indicates that the archetype is going to be provided to the user.
-    /// Component slice versions are incremented here.
-    fn accepted(&mut self);
 }
 
 /// A fetch which only retrieves shared references to component data.
@@ -361,13 +357,6 @@ macro_rules! impl_view_tuple {
                     result = result.or_else(|| $ty.version::<Comp>());
                 )*
                 result
-            }
-
-            #[inline]
-            fn accepted(&mut self) {
-                #[allow(non_snake_case)]
-                let ($( $ty, )*) = &mut self.fetches;
-                $( $ty.accepted(); )*
             }
         }
     };

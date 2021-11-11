@@ -207,9 +207,6 @@ impl<'a, T: Component> Fetch for Slice<'a, T> {
             None
         }
     }
-
-    #[inline]
-    fn accepted(&mut self) {}
 }
 
 #[doc(hidden)]
