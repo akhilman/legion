@@ -199,37 +199,82 @@ impl<'a, T: Component> Index<ComponentIndex> for ComponentSlice<'a, T> {
     }
 }
 
+#[derive(Clone)]
+struct VersionCounter<'a> {
+    version: &'a AtomicVersion,
+    next_version: Version,
+}
+
+impl<'a> VersionCounter<'a> {
+    #[inline]
+    fn new(version: &'a AtomicVersion, next_version: Version) -> Self {
+        Self {
+            version,
+            next_version,
+        }
+    }
+    #[inline]
+    fn set_next(&self) {
+        self.version.store(self.next_version, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn get(&self) -> Version {
+        self.version.load(Ordering::Relaxed)
+    }
+}
+
 /// An accessor for a mutable slice reference of components for a single archetype.
 pub struct ComponentSliceMut<'a, T: Component> {
     components: &'a mut [T],
-    version: &'a AtomicVersion,
-    next_version: Version,
+    version_counter: VersionCounter<'a>,
 }
 
 impl<'a, T: Component> ComponentSliceMut<'a, T> {
     pub(crate) fn new(components: &'a mut [T], version: &'a AtomicVersion) -> Self {
         Self {
             components,
-            version,
-            next_version: next_component_version(),
+            version_counter: VersionCounter::new(version, next_component_version()),
         }
+    }
+
+    /// TODO Write documentation
+    pub unsafe fn get_component_mut(&mut self, index: usize) -> Option<ComponentMut<'a, T>> {
+        let version_counter = &self.version_counter;
+        self.components.get_mut(index).map(|component| {
+            ComponentMut {
+                // Convert to raw pointer to avoid borrow check
+                component: (component as *mut T).as_mut().unwrap(),
+                version_counter: version_counter.clone(),
+            }
+        })
     }
 
     /// Converts this slice into its inner value.
     /// This increments the slice's version.
     pub fn into_slice(self) -> &'a mut [T] {
-        self.update_version();
+        self.version_counter.set_next();
         self.components
     }
 
-    #[inline]
-    fn update_version(&self) {
-        self.version.store(self.next_version, Ordering::Relaxed);
+    /// TODO Write documentation
+    pub fn split_at(self, mid: usize) -> (Self, Self) {
+        let (head, tail) = self.components.split_at_mut(mid);
+        (
+            Self {
+                components: head,
+                version_counter: self.version_counter.clone(),
+            },
+            Self {
+                components: tail,
+                version_counter: self.version_counter,
+            },
+        )
     }
 
     /// Returns current component version.
     pub fn version(&self) -> Version {
-        self.version.load(Ordering::Relaxed)
+        self.version_counter.get()
     }
 }
 
@@ -243,7 +288,7 @@ impl<'a, T: Component> Deref for ComponentSliceMut<'a, T> {
 
 impl<'a, T: Component> DerefMut for ComponentSliceMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.update_version();
+        self.version_counter.set_next();
         &mut self.components
     }
 }
@@ -257,8 +302,37 @@ impl<'a, T: Component> Index<ComponentIndex> for ComponentSliceMut<'a, T> {
 
 impl<'a, T: Component> IndexMut<ComponentIndex> for ComponentSliceMut<'a, T> {
     fn index_mut(&mut self, index: ComponentIndex) -> &mut Self::Output {
-        self.update_version();
+        self.version_counter.set_next();
         &mut self.components[index.0]
+    }
+}
+
+/// TODO Write documentation
+pub struct ComponentMut<'a, T: Component> {
+    component: &'a mut T,
+    version_counter: VersionCounter<'a>,
+}
+
+impl<'a, T: Component> ComponentMut<'a, T> {
+    /// TODO Write documentation
+    #[inline]
+    pub fn version(&self) -> Version {
+        self.version_counter.get()
+    }
+}
+
+impl<'a, T: Component> Deref for ComponentMut<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.component
+    }
+}
+
+impl<'a, T: Component> DerefMut for ComponentMut<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.version_counter.set_next();
+        &mut self.component
     }
 }
 

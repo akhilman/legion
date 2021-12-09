@@ -89,7 +89,8 @@ pub use crate::internals::{
         group::{Group, GroupDef, GroupSource},
         index::SearchIndex,
         packed::PackedStorage,
-        ComponentIndex, ComponentMeta, ComponentSlice, ComponentSliceMut, ComponentStorage,
-        Components, Epoch, MultiMut, PackOptions, UnknownComponentStorage, Version,
+        ComponentIndex, ComponentMeta, ComponentMut, ComponentSlice, ComponentSliceMut,
+        ComponentStorage, Components, Epoch, MultiMut, PackOptions, UnknownComponentStorage,
+        Version,
     },
 };

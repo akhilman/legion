@@ -139,13 +139,13 @@ impl<'a, T: Component> Iterator for WriteIter<'a, T> {
 }
 
 #[doc(hidden)]
-pub struct WriteFetch<'a, T: Component> (
-    ComponentSliceMut<'a, T>,
+pub struct WriteFetch<'a, T: Component>(
+    pub(super) ComponentSliceMut<'a, T>, // This field is used by super::tracked
 );
 
 impl<'a, T: Component> From<ComponentSliceMut<'a, T>> for WriteFetch<'a, T> {
     fn from(slice: ComponentSliceMut<'a, T>) -> Self {
-        WriteFetch ( slice )
+        WriteFetch(slice)
     }
 }
 
@@ -179,9 +179,7 @@ impl<'a, T: Component> Fetch for WriteFetch<'a, T> {
     fn find<C: 'static>(&self) -> Option<&[C]> {
         if TypeId::of::<C>() == TypeId::of::<T>() {
             // safety: C and T are the same type
-            Some(unsafe {
-                std::slice::from_raw_parts(self.0.as_ptr() as *const C, self.0.len())
-            })
+            Some(unsafe { std::slice::from_raw_parts(self.0.as_ptr() as *const C, self.0.len()) })
         } else {
             None
         }
